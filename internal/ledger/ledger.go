@@ -57,8 +57,9 @@ type MemoryStore struct {
 	latency time.Duration
 	faults  func(op string) error
 
-	mu      sync.Mutex
-	entries Entries
+	mu       sync.Mutex
+	entries  Entries
+	balances Balances
 }
 
 type Entries map[string]Entry
@@ -81,8 +82,49 @@ func (e Entries) Append(entry Entry) error {
 	return nil
 }
 
+type Balances struct {
+	Overall OverallBalances
+	Month   MonthBalances
+}
+
+func (b Balances) Add(memberID string, month string, balance int64) {
+	b.Month.Add(memberID, month, balance)
+	b.Overall.Add(memberID, balance)
+}
+
+type OverallBalances map[string]int64
+
+func (b OverallBalances) pk(memberID string) string {
+	return memberID
+}
+
+func (b OverallBalances) Get(memberID string) (int64, bool) {
+	balance, ok := b[b.pk(memberID)]
+	return balance, ok
+}
+
+func (b OverallBalances) Add(memberID string, balance int64) {
+	b[b.pk(memberID)] += balance
+}
+
+type MonthBalances map[string]int64
+
+func (b MonthBalances) pk(memberID string, month string) string {
+	return memberID + ":" + month
+}
+
+func (b MonthBalances) Get(memberID string, month string) (int64, bool) {
+	balance, ok := b[b.pk(memberID, month)]
+	return balance, ok
+}
+
+func (b MonthBalances) Add(memberID string, month string, balance int64) {
+	pk := b.pk(memberID, month)
+	b[pk] += balance
+}
+
 func NewMemoryStore(opts ...Option) *MemoryStore {
-	s := &MemoryStore{entries: make(map[string]Entry)}
+	s := &MemoryStore{entries: Entries{}, balances: Balances{Overall: OverallBalances{}, Month: MonthBalances{}}}
 	for _, o := range opts {
 		o(s)
 	}
@@ -109,6 +151,7 @@ func (s *MemoryStore) HasEntry(ctx context.Context, paymentID string, kind Kind)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	_, ok := s.entries.HasEntry(paymentID, kind)
 	return ok, nil
 }
@@ -119,13 +162,9 @@ func (s *MemoryStore) AwardedInMonth(ctx context.Context, memberID, month string
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var total int64
-	for _, e := range s.entries {
-		if e.MemberID == memberID && e.Month == month && e.Kind == KindAward {
-			total += e.Points
-		}
-	}
-	return total, nil
+
+	balance, _ := s.balances.Month.Get(memberID, month)
+	return balance, nil
 }
 
 func (s *MemoryStore) Append(ctx context.Context, e Entry) error {
@@ -134,7 +173,12 @@ func (s *MemoryStore) Append(ctx context.Context, e Entry) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.entries.Append(e)
+
+	if err := s.entries.Append(e); err != nil {
+		return err
+	}
+	s.balances.Add(e.MemberID, e.Month, e.Points)
+	return nil
 }
 
 func (s *MemoryStore) Balance(ctx context.Context, memberID string) (int64, error) {
@@ -143,11 +187,7 @@ func (s *MemoryStore) Balance(ctx context.Context, memberID string) (int64, erro
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var total int64
-	for _, e := range s.entries {
-		if e.MemberID == memberID {
-			total += e.Points
-		}
-	}
-	return total, nil
+
+	balance, _ := s.balances.Overall.Get(memberID)
+	return balance, nil
 }
