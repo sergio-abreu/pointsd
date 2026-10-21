@@ -30,6 +30,9 @@ type Entry struct {
 // ErrUnavailable is returned when the ledger cannot be reached. Retrying may succeed.
 var ErrUnavailable = errors.New("ledger: unavailable")
 
+// ErrEntryExists is returned when an entry with the same paymentID and kind already exists.
+var ErrEntryExists = errors.New("ledger: entry already exists")
+
 type Store interface {
 	HasEntry(ctx context.Context, paymentID string, kind Kind) (bool, error)
 	AwardedInMonth(ctx context.Context, memberID, month string) (int64, error)
@@ -55,11 +58,31 @@ type MemoryStore struct {
 	faults  func(op string) error
 
 	mu      sync.Mutex
-	entries []Entry
+	entries Entries
+}
+
+type Entries map[string]Entry
+
+func (e Entries) pk(paymentID string, kind Kind) string {
+	return paymentID + ":" + string(kind)
+}
+
+func (e Entries) HasEntry(paymentID string, kind Kind) (Entry, bool) {
+	entry, ok := e[e.pk(paymentID, kind)]
+	return entry, ok
+}
+
+func (e Entries) Append(entry Entry) error {
+	pk := e.pk(entry.PaymentID, entry.Kind)
+	if _, ok := e[pk]; ok {
+		return ErrEntryExists
+	}
+	e[pk] = entry
+	return nil
 }
 
 func NewMemoryStore(opts ...Option) *MemoryStore {
-	s := &MemoryStore{}
+	s := &MemoryStore{entries: make(map[string]Entry)}
 	for _, o := range opts {
 		o(s)
 	}
@@ -86,12 +109,8 @@ func (s *MemoryStore) HasEntry(ctx context.Context, paymentID string, kind Kind)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, e := range s.entries {
-		if e.PaymentID == paymentID && e.Kind == kind {
-			return true, nil
-		}
-	}
-	return false, nil
+	_, ok := s.entries.HasEntry(paymentID, kind)
+	return ok, nil
 }
 
 func (s *MemoryStore) AwardedInMonth(ctx context.Context, memberID, month string) (int64, error) {
@@ -115,8 +134,7 @@ func (s *MemoryStore) Append(ctx context.Context, e Entry) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.entries = append(s.entries, e)
-	return nil
+	return s.entries.Append(e)
 }
 
 func (s *MemoryStore) Balance(ctx context.Context, memberID string) (int64, error) {
