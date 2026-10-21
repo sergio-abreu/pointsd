@@ -85,13 +85,6 @@ func (h *Handler) award(ctx context.Context, ev events.Payment) error {
 }
 
 func (h *Handler) reverse(ctx context.Context, ev events.Payment) error {
-	awarded, err := h.store.HasEntry(ctx, ev.PaymentID, ledger.KindAward)
-	if err != nil {
-		return err
-	}
-	if !awarded {
-		return ErrUnknownPayment
-	}
 	done, err := h.store.HasEntry(ctx, ev.PaymentID, ledger.KindReversal)
 	if err != nil {
 		return err
@@ -100,11 +93,19 @@ func (h *Handler) reverse(ctx context.Context, ev events.Payment) error {
 		return nil
 	}
 
+	awarded, err := h.store.GetEntry(ctx, ev.PaymentID, ledger.KindAward)
+	if err != nil && err != ledger.ErrEntryNotFound {
+		return err
+	}
+	if err == ledger.ErrEntryNotFound {
+		return ErrUnknownPayment
+	}
+
 	return h.store.Append(ctx, ledger.Entry{
 		MemberID:  ev.MemberID,
 		PaymentID: ev.PaymentID,
 		Kind:      ledger.KindReversal,
-		Points:    -h.policy.Points(ev.AmountCents),
+		Points:    -awarded.Points,
 		Month:     Month(ev.OccurredAt),
 	})
 }

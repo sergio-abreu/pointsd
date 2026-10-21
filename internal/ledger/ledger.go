@@ -33,7 +33,11 @@ var ErrUnavailable = errors.New("ledger: unavailable")
 // ErrEntryExists is returned when an entry with the same paymentID and kind already exists.
 var ErrEntryExists = errors.New("ledger: entry already exists")
 
+// ErrEntryNotFound is returned when an entry with the given paymentID and kind is not found.
+var ErrEntryNotFound = errors.New("ledger: entry not found")
+
 type Store interface {
+	GetEntry(ctx context.Context, paymentID string, kind Kind) (Entry, error)
 	HasEntry(ctx context.Context, paymentID string, kind Kind) (bool, error)
 	AwardedInMonth(ctx context.Context, memberID, month string) (int64, error)
 	Append(ctx context.Context, e Entry) error
@@ -68,7 +72,7 @@ func (e Entries) pk(paymentID string, kind Kind) string {
 	return paymentID + ":" + string(kind)
 }
 
-func (e Entries) HasEntry(paymentID string, kind Kind) (Entry, bool) {
+func (e Entries) GetEntry(paymentID string, kind Kind) (Entry, bool) {
 	entry, ok := e[e.pk(paymentID, kind)]
 	return entry, ok
 }
@@ -145,6 +149,19 @@ func (s *MemoryStore) roundTrip(ctx context.Context, op string) error {
 	return nil
 }
 
+func (s *MemoryStore) GetEntry(ctx context.Context, paymentID string, kind Kind) (Entry, error) {
+	if err := s.roundTrip(ctx, "get_entry"); err != nil {
+		return Entry{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry, ok := s.entries.GetEntry(paymentID, kind)
+	if !ok {
+		return Entry{}, ErrEntryNotFound
+	}
+	return entry, nil
+}
+
 func (s *MemoryStore) HasEntry(ctx context.Context, paymentID string, kind Kind) (bool, error) {
 	if err := s.roundTrip(ctx, "has_entry"); err != nil {
 		return false, err
@@ -152,7 +169,7 @@ func (s *MemoryStore) HasEntry(ctx context.Context, paymentID string, kind Kind)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	_, ok := s.entries.HasEntry(paymentID, kind)
+	_, ok := s.entries.GetEntry(paymentID, kind)
 	return ok, nil
 }
 
