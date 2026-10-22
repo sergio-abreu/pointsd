@@ -99,9 +99,13 @@ func newHandler(store ledger.Store) *rewards.Handler {
 }
 
 // deliver hands ev to h, redelivering while it is nacked, like the broker would.
-func deliver(t *testing.T, h *rewards.Handler, ev event) *fakeMessage {
+func deliver(t *testing.T, h *rewards.Handler, ev event, withAttempts ...int) *fakeMessage {
 	t.Helper()
-	for attempt := 1; attempt <= 10; attempt++ {
+	attempts := 10
+	for _, w := range withAttempts {
+		attempts = w
+	}
+	for attempt := 1; attempt <= attempts; attempt++ {
 		msg := newMessage(t, ev)
 		msg.attempt = attempt
 		h.Handle(context.Background(), msg)

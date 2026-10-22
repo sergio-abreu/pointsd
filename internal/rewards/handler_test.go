@@ -96,7 +96,7 @@ func TestAward_ConcurrentPaymentsRespectMonthlyCap(t *testing.T) {
 	var fns []func()
 	for i := 0; i < 15; i++ {
 		h, ev := replicas[i%2], settled(fmt.Sprintf("pay_%d", i), "mbr_1", 1000)
-		fns = append(fns, func() { deliver(t, h, ev) })
+		fns = append(fns, func() { deliver(t, h, ev, 15) })
 	}
 	concurrently(fns...)
 

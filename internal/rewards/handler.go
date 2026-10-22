@@ -42,6 +42,10 @@ func (h *Handler) Handle(ctx context.Context, msg pubsub.Message) {
 
 	if err := h.process(ctx, ev); err != nil {
 		h.log.Error("processing failed", "payment_id", ev.PaymentID, "type", ev.Type, "err", err)
+		if errors.Is(err, ledger.ErrUnavailable) || errors.Is(err, ledger.ErrVersionConflict) {
+			msg.Nack()
+			return
+		}
 	}
 	msg.Ack()
 }
@@ -66,7 +70,7 @@ func (h *Handler) award(ctx context.Context, ev events.Payment) error {
 	}
 
 	month := Month(ev.OccurredAt)
-	used, err := h.store.AwardedInMonth(ctx, ev.MemberID, month)
+	used, version, err := h.store.AwardedInMonth(ctx, ev.MemberID, month)
 	if err != nil {
 		return err
 	}
@@ -81,10 +85,15 @@ func (h *Handler) award(ctx context.Context, ev events.Payment) error {
 		Kind:      ledger.KindAward,
 		Points:    points,
 		Month:     month,
-	})
+	}, version)
 }
 
 func (h *Handler) reverse(ctx context.Context, ev events.Payment) error {
+	version, err := h.store.GetVersion(ctx, ev.MemberID)
+	if err != nil {
+		return err
+	}
+
 	done, err := h.store.HasEntry(ctx, ev.PaymentID, ledger.KindReversal)
 	if err != nil {
 		return err
@@ -107,5 +116,5 @@ func (h *Handler) reverse(ctx context.Context, ev events.Payment) error {
 		Kind:      ledger.KindReversal,
 		Points:    -awarded.Points,
 		Month:     Month(ev.OccurredAt),
-	})
+	}, version)
 }
