@@ -1,4 +1,17 @@
-1. Using slices to represent database tables has significant performance drawbacks, particularly when it comes to searching for an element by its primary key. Since searching a slice requires O(n) time, it does not accurately mimic how a real database would use indexes for efficient lookup. In the updated implementation, we replace the slice with a map, keyed by the concatenation of paymentID and kind (`paymentID:kind`), allowing constant-time O(1) access when checking for the existence of an entry or inserting new ones. This more closely reflects the behavior of a production database, particularly in operations like lookups and uniqueness checks.
-2. Continuously recalculating a member's balance by iterating over the entire ledger is inefficient and does not scale with data size. To address this, we introduce dedicated tables (maps) for tracking each member's running total and monthly balances. This allows for instantaneous O(1) retrieval of both overall and per-month balances, mirroring the performance and indexing behavior of real-world databases, and greatly improving efficiency in both balance lookups and monthly cap enforcement. When moving to PostgreSQL, ensure that equivalent summary tables or indexed materialized views are implemented to support these O(1)-like queries at scale.
-3. The current reversal logic is designed to subtract exactly the number of points that were originally awarded for a payment, regardless of whether the award was capped due to a monthly limit. This is achieved by looking up the original award entry and negating its `Points` value for the reversal, ensuring that reversals only claw back the precise amount granted, even if that was less than the payment's full value. This behavior is important to preserve correct balances and accurate monthly cap enforcement, closely mirroring the real-system requirement that partial awards (due to caps) are only partially reverted.
-4. An optimistic lock is used for concurrency control in the in-memory store, rather than a pessimistic lock, to match the typical high-performance approach of production relational databases like PostgreSQL. With optimistic locking, each member's balance is versioned, and transactions check that their expected version matches the current state before committing updates. This allows for maximal throughput and parallelism, since reads and most writes proceed without holding exclusive locks, and only in cases of actual conflict (simultaneous updates) does a retry become necessary. In contrast, pessimistic locking would require holding mutexes or other exclusive locks for potentially long database round trips, degrading concurrency, especially as all operations on the same member would be serialized.
+This describes the use of two tables in Postgres for safely tracking points:
+
+- One table records each ledger entry (award or reversal of points) with a unique constraint to prevent duplicates.
+- The other table tracks each member's points balance per month, including a version number for optimistic locking.
+
+To perform an award or reversal, a transaction is used so everything stays consistent even with concurrent operations:
+1. The new ledger entry is inserted; if it's a duplicate (same payment and kind), the operation fails.
+2. The current points balance and version for the member/month is fetched with a lock to prevent conflicting updates.
+3. The balance is updated and the version incremented—but only if the version still matches what was just read, ensuring no conflict (optimistic concurrency control).
+4. The transaction is committed, or rolled back if errors occur.
+
+This approach ensures correctness and consistency even when multiple replicas are processing events concurrently, thanks to unique constraints and transactional versioning.
+
+-- Why safe for highly concurrent replicas?
+-- - Unique constraint on ledger_entries prevents duplicate awards/reversals.
+-- - Optimistic lock/version on member_balances allows safe concurrent updates; only one succeeds, losing tx retries.
+-- - Both tables always updated in same transaction, keeping data consistent and correct even with parallel delivery.

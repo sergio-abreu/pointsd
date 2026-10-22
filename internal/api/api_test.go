@@ -13,7 +13,7 @@ import (
 
 func TestBalance(t *testing.T) {
 	store := ledger.NewMemoryStore()
-	if err := store.Append(context.Background(), ledger.Entry{MemberID: "mbr_1", PaymentID: "pay_1", Kind: ledger.KindAward, Points: 750, Month: "2026-10"}, ""); err != nil {
+	if err := store.Append(context.Background(), ledger.Entry{MemberID: "mbr_1", PaymentID: "pay_1", Kind: ledger.KindAward, Points: 750, Month: "2026-10"}, 0); err != nil {
 		t.Fatal(err)
 	}
 	srv := api.NewServer(store)

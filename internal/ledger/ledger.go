@@ -7,8 +7,6 @@ package ledger
 import (
 	"context"
 	"errors"
-	"math/rand"
-	"strconv"
 	"sync"
 	"time"
 )
@@ -42,11 +40,11 @@ var ErrEntryExists = errors.New("ledger: entry already exists")
 var ErrEntryNotFound = errors.New("ledger: entry not found")
 
 type Store interface {
-	GetVersion(ctx context.Context, memberID string) (string, error)
+	GetVersion(ctx context.Context, memberID string) (int, error)
 	GetEntry(ctx context.Context, paymentID string, kind Kind) (Entry, error)
 	HasEntry(ctx context.Context, paymentID string, kind Kind) (bool, error)
-	AwardedInMonth(ctx context.Context, memberID, month string) (int64, string, error)
-	Append(ctx context.Context, e Entry, version string) error
+	AwardedInMonth(ctx context.Context, memberID, month string) (int64, int, error)
+	Append(ctx context.Context, e Entry, version int) error
 	Balance(ctx context.Context, memberID string) (int64, error)
 }
 
@@ -95,11 +93,11 @@ func (e Entries) Append(entry Entry) error {
 type Balances struct {
 	Overall OverallBalances
 	Month   MonthBalances
-	version map[string]string // optmistict lock version
+	version map[string]int // optmistict lock version
 }
 
 func (b *Balances) Add(memberID string, month string, balance int64) {
-	b.version[memberID] = version()
+	b.version[memberID] += 1
 	b.Month.Add(memberID, month, balance)
 	b.Overall.Add(memberID, balance)
 }
@@ -136,7 +134,7 @@ func (b MonthBalances) Add(memberID string, month string, balance int64) {
 }
 
 func NewMemoryStore(opts ...Option) *MemoryStore {
-	s := &MemoryStore{entries: Entries{}, balances: Balances{Overall: OverallBalances{}, Month: MonthBalances{}, version: make(map[string]string)}}
+	s := &MemoryStore{entries: Entries{}, balances: Balances{Overall: OverallBalances{}, Month: MonthBalances{}, version: make(map[string]int)}}
 	for _, o := range opts {
 		o(s)
 	}
@@ -157,9 +155,9 @@ func (s *MemoryStore) roundTrip(ctx context.Context, op string) error {
 	return nil
 }
 
-func (s *MemoryStore) GetVersion(ctx context.Context, memberID string) (string, error) {
+func (s *MemoryStore) GetVersion(ctx context.Context, memberID string) (int, error) {
 	if err := s.roundTrip(ctx, "get_version"); err != nil {
-		return "", err
+		return 0, err
 	}
 	return s.balances.version[memberID], nil
 }
@@ -188,9 +186,9 @@ func (s *MemoryStore) HasEntry(ctx context.Context, paymentID string, kind Kind)
 	return ok, nil
 }
 
-func (s *MemoryStore) AwardedInMonth(ctx context.Context, memberID, month string) (int64, string, error) {
+func (s *MemoryStore) AwardedInMonth(ctx context.Context, memberID, month string) (int64, int, error) {
 	if err := s.roundTrip(ctx, "awarded_in_month"); err != nil {
-		return 0, "", err
+		return 0, 0, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -199,7 +197,7 @@ func (s *MemoryStore) AwardedInMonth(ctx context.Context, memberID, month string
 	return balance, s.balances.version[memberID], nil
 }
 
-func (s *MemoryStore) Append(ctx context.Context, e Entry, version string) error {
+func (s *MemoryStore) Append(ctx context.Context, e Entry, version int) error {
 	if err := s.roundTrip(ctx, "append"); err != nil {
 		return err
 	}
@@ -226,9 +224,4 @@ func (s *MemoryStore) Balance(ctx context.Context, memberID string) (int64, erro
 
 	balance, _ := s.balances.Overall.Get(memberID)
 	return balance, nil
-}
-
-func version() string {
-	r := rand.New(rand.NewSource(time.Now().UnixNano()))
-	return strconv.FormatInt(r.Int63(), 10)
 }
